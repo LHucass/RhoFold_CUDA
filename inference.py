@@ -1,12 +1,10 @@
 """ """
 import logging
-from pathlib import Path
 import os
 import sys
 
 import numpy as np
 import torch
-from huggingface_hub import snapshot_download
 
 from rhofold.data.balstn import BLASTN
 from rhofold.rhofold import RhoFold
@@ -41,13 +39,6 @@ def main(config):
     logger.info(f'Constructing RhoFold')
     model = RhoFold(rhofold_config)
 
-    logger.info(f'    downloading {config.ckpt}')
-    try:
-        snapshot_download(repo_id='cuhkaih/rhofold', local_dir=Path(config.ckpt).parent)
-    except Exception as e:
-        logger.info(f'    Error: Could not download the checkpoint from Hugging Face (cuhkaih/rhofold) to {Path(config.ckpt).parent}.')
-        raise e
-        
     logger.info(f'    loading {config.ckpt}')
     model.load_state_dict(torch.load(config.ckpt, map_location=torch.device('cpu'))['model'])
     model.eval()
@@ -114,12 +105,17 @@ def main(config):
                                                          logger=logger)
 
     # Amber relaxation
+    Implicit_solvent = config.imp_solv
     if config.relax_steps is not None:
         relax_steps = int(config.relax_steps)
         if relax_steps > 0:
             with timing(f'Amber Relaxation : {relax_steps} iterations', logger=logger):
-                amber_relax = AmberRelaxation(max_iterations=relax_steps, logger=logger)
-                relaxed_model = f'{config.output_dir}/relaxed_{relax_steps}_model.pdb'
+                if torch.cuda.is_available():
+                    relaxed_model = f'{config.output_dir}/relaxed_{relax_steps}_model.pdb'
+                    amber_relax = AmberRelaxation(max_iterations=relax_steps, logger=logger, use_gpu=True, imp_solv=Implicit_solvent)
+                else:
+                    relaxed_model = f'{config.output_dir}/relaxed_{relax_steps}_model.pdb'
+                    amber_relax = AmberRelaxation(max_iterations=relax_steps, logger=logger, imp_solv=Implicit_solvent)
                 amber_relax.process(unrelaxed_model, relaxed_model)
 
 if __name__ == '__main__':
@@ -127,7 +123,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
 
     parser.add_argument("--device", help="Default cpu. If GPUs are available, you can set --device cuda:<GPU_index> for faster prediction.", default=None)
-    parser.add_argument("--ckpt", help="Path to the pretrained model, default ./pretrained/rhofold_pretrained_params.pt", default='./pretrained/rhofold_pretrained_params.pt')
+    parser.add_argument("--ckpt", help="Path to the pretrained model, default ./pretrained/model_20221010_params.pt", default='./pretrained/rhofold_pretrained_params.pt')
     parser.add_argument("--input_fas", help="Path to the input fasta file. Valid nucleic acids in RNA sequence: A, U, G, C", required=True)
     parser.add_argument("--input_a3m", help="Path to the input msa file. Default None."
                                             "If --input_a3m is not given (set to None), MSA will be generated automatically. ", default=None)
@@ -140,6 +136,8 @@ if __name__ == '__main__':
                                                        "the modeling will run using single sequence only (input_fas)", default=False)
     parser.add_argument("--database_dpath", help="Path to the pretrained model, default ./database", default='./database')
     parser.add_argument("--binary_dpath", help="Path to the pretrained model, default ./rhofold/data/bin", default='./rhofold/data/bin')
+    parser.add_argument("--imp_solv", help="use Implicit solvent model to fasten the speed of relaxion, especially for the sequence that is very long, default is false", default=False)
+
 
     args = parser.parse_args()
     main(args)
